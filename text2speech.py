@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""text2speech: Italian TTS -> MP3 with word-level ASS karaoke, played in native mpv."""
+"""text2speech: TTS -> MP3 with word-level ASS karaoke, played in native mpv."""
 import argparse
 import asyncio
 from datetime import datetime
@@ -21,7 +21,7 @@ MAX_CHARS = 100_000
 
 
 def auto_workers(characters):
-    """Practical defaults from the measured 1k/5k/10k/50k/100k benchmarks."""
+    """Practical defaults derived from 1k/5k/10k/50k/100k benchmarks."""
     if characters <= 1_000:
         return 6
     if characters >= 40_000:
@@ -43,7 +43,7 @@ def split_text(text, limit=1100):
                 words = sentence.split()
                 for word in words:
                     if len(word) > limit:
-                        raise ValueError('Una parola supera il limite di 1100 caratteri')
+                        raise ValueError('A single word exceeds the 1100 character limit')
                     if len(current) + len(word) + bool(current) > limit:
                         pieces.append(current)
                         current = ''
@@ -76,7 +76,7 @@ async def speak(text, index, scratch, voice, rate):
                                            (part['offset'] + part['duration']) / 1e7,
                                            part['text']))
             if dest.stat().st_size < 1000 or not boundaries:
-                raise RuntimeError('Risposta audio o tempi delle parole mancanti')
+                raise RuntimeError('Missing audio response or word boundaries')
             return dest, boundaries
         except Exception:
             dest.unlink(missing_ok=True)
@@ -103,7 +103,7 @@ def srt_time(seconds):
 
 def subtitles(words, destination):
     header = '''[Script Info]
-Title: Karaoke italiano
+Title: Synchronized Karaoke
 ScriptType: v4.00+
 WrapStyle: 0
 ScaledBorderAndShadow: yes
@@ -147,11 +147,11 @@ def read_input(args):
     else:
         tool = shutil.which('wl-paste') or shutil.which('xclip')
         if not tool:
-            raise RuntimeError('Installa wl-paste o xclip per leggere gli appunti')
+            raise RuntimeError('Install wl-paste or xclip to read from the system clipboard')
         cmd = [tool, '--no-newline', '--type', 'text/plain'] if Path(tool).name == 'wl-paste' else [tool, '-selection', 'clipboard', '-o']
         text = subprocess.run(cmd, check=True, capture_output=True, text=True).stdout
     if not text.strip() or len(text) > MAX_CHARS:
-        raise ValueError('Il testo deve contenere da 1 a 100.000 caratteri')
+        raise ValueError('Text must contain between 1 and 100,000 characters')
     return text
 
 
@@ -159,7 +159,7 @@ async def generate(text, destination, voice=VOICE, rate=RATE, workers=None):
     if workers is None:
         workers = auto_workers(len(text))
     if not 1 <= workers <= 12:
-        raise ValueError('workers deve essere compreso tra 1 e 12')
+        raise ValueError('workers must be between 1 and 12')
     chunks = split_text(text)
     began = time.monotonic()
     with tempfile.TemporaryDirectory(prefix='text2speech-karaoke-') as temp:
@@ -183,14 +183,14 @@ async def generate(text, destination, voice=VOICE, rate=RATE, workers=None):
                                          '-ac', '1', '-ar', '24000', '-'], check=True, capture_output=True)
                     pcm = result.stdout
                     if not pcm or len(pcm) % 2:
-                        raise RuntimeError(f'Segmento audio {i} non valido')
+                        raise RuntimeError(f'Audio segment {i} is invalid')
                     offset = frames / 24000
                     length = len(pcm) / 48000
                     words.extend((round(offset + begin, 3), round(min(offset + end, offset + length), 3), token)
                                  for begin, end, token in marks)
                     joined.write(pcm)
                     frames += len(pcm) // 2
-                    print(f'\rSegmenti: {i}/{len(chunks)}', end='', flush=True)
+                    print(f'\rSegments: {i}/{len(chunks)}', end='', flush=True)
         finally:
             for task in tasks:
                 if not task.done():
@@ -209,45 +209,45 @@ async def generate(text, destination, voice=VOICE, rate=RATE, workers=None):
 
 def main():
     parser = argparse.ArgumentParser(
-        description='Crea un MP3 in italiano con karaoke parola per parola e lo apre in mpv.'
+        description='Generate high-quality MP3 audio with word-level karaoke subtitles and open in mpv.'
     )
     source = parser.add_mutually_exclusive_group(required=True)
-    source.add_argument('-d', '--text', help='Testo fra virgolette')
-    source.add_argument('-i', '--input', help='File UTF-8 (.txt); usa - per leggere da stdin')
-    source.add_argument('-c', '--clipboard', action='store_true', help='Testo dagli appunti (clipboard)')
-    parser.add_argument('-o', '--output', type=Path, help='Percorso MP3 (default: ~/Music/VoceKaraoke/)')
-    parser.add_argument('-np', '--no-play', action='store_true', help='Genera i file senza aprire mpv')
+    source.add_argument('-d', '--text', help='Input text in quotes')
+    source.add_argument('-i', '--input', help='UTF-8 text file (.txt); use - for stdin')
+    source.add_argument('-c', '--clipboard', action='store_true', help='Read text from system clipboard')
+    parser.add_argument('-o', '--output', type=Path, help='Target MP3 path (default: ~/Music/VoceKaraoke/)')
+    parser.add_argument('-np', '--no-play', action='store_true', help='Generate audio and subtitles without launching mpv')
     parser.add_argument('--workers', type=int, choices=range(1, 13),
-                        metavar='N', help='Richieste TTS simultanee (1-12; default automatico in base alla lunghezza)')
-    parser.add_argument('--voice', default=VOICE, help='Voce edge-tts (default: it-IT-IsabellaNeural)')
-    parser.add_argument('--rate', default=RATE, help='Regolazione velocità edge-tts (default: -5%%)')
+                        metavar='N', help='Simultaneous TTS requests (1-12; default: auto based on text length)')
+    parser.add_argument('--voice', default=VOICE, help='Edge TTS voice (default: it-IT-IsabellaNeural)')
+    parser.add_argument('--rate', default=RATE, help='Edge TTS rate adjustment (default: -5%%)')
     args = parser.parse_args()
     try:
         if not re.fullmatch(r'[+-]\d{1,2}%', args.rate):
-            raise ValueError('Velocità: usa ad esempio -5% o +10%')
+            raise ValueError('Invalid rate: use e.g. -5% or +10%')
         text = read_input(args)
         output = (args.output.expanduser().resolve() if args.output else
                   Path.home() / 'Music' / 'VoceKaraoke' /
-                  f'lettura-{datetime.now():%Y%m%d-%H%M%S}-{uuid.uuid4().hex[:6]}.mp3')
+                  f'reading-{datetime.now():%Y%m%d-%H%M%S}-{uuid.uuid4().hex[:6]}.mp3')
         if output.suffix.lower() != '.mp3':
-            raise ValueError('Il percorso di output deve terminare in .mp3')
+            raise ValueError('Output path must end in .mp3')
         if output.exists() or output.with_suffix('.ass').exists() or output.with_suffix('.srt').exists():
-            raise ValueError(f'Output già esistente: {output}')
+            raise ValueError(f'Output already exists: {output}')
         if not shutil.which('ffmpeg'):
-            raise RuntimeError('ffmpeg non è installato nel PATH')
+            raise RuntimeError('ffmpeg is not installed or not in PATH')
         if not args.no_play and not shutil.which('mpv'):
-            raise RuntimeError('mpv non è installato nel PATH')
+            raise RuntimeError('mpv is not installed or not in PATH')
         workers = args.workers if args.workers is not None else auto_workers(len(text))
-        print(f'Worker TTS: {workers} ({"manuale" if args.workers is not None else "automatico"})', flush=True)
+        print(f'TTS Workers: {workers} ({"manual" if args.workers is not None else "auto"})', flush=True)
         duration, elapsed = asyncio.run(generate(text, output, args.voice, args.rate, workers))
         print(f'MP3: {output}\nKaraoke: {output.with_suffix(".ass")}')
-        print(f'Durata audio: {duration:.1f} s | Generazione: {elapsed:.1f} s | Velocità: {duration/elapsed:.1f}×')
+        print(f'Audio duration: {duration:.1f} s | Generation: {elapsed:.1f} s | Speed: {duration/elapsed:.1f}×')
         if not args.no_play:
             subprocess.Popen(['mpv', '--force-window=yes', '--audio-display=no', '--sub-auto=no',
                               '--sub-visibility=yes', f'--sub-file={output.with_suffix(".ass")}', str(output)],
                              stdin=subprocess.DEVNULL, start_new_session=True)
     except (OSError, ValueError, RuntimeError, subprocess.CalledProcessError) as exc:
-        parser.exit(1, f'Errore: {exc}\n')
+        parser.exit(1, f'Error: {exc}\n')
 
 
 if __name__ == '__main__':
